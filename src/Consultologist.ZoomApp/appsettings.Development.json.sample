@@ -1,0 +1,25 @@
+{
+  "//": "Copy to appsettings.Development.json (git-ignored) and fill in real values for local runs. Never commit the filled copy.",
+
+  "AzureAd": {
+    "Instance": "https://login.microsoftonline.com/",
+    "TenantId": "<your-entra-tenant-id>",
+    "ClientId": "<the-zoom-app's-entra-app-client-id>",
+    "ClientSecret": "<the-zoom-app's-entra-client-secret-or-use-a-certificate>",
+    "CallbackPath": "/signin-oidc"
+  },
+
+  "Engine": {
+    "ApiHost": "https://east.ca.api.consultologist.ai/api",
+    "AccessAsUserScope": "api://b3866040-8bae-4c01-88ba-ecff646df451/access_as_user",
+    "TranscriptInputSlot": "consult_draft",
+    "PollIntervalSeconds": 3
+  },
+
+  "Zoom": {
+    "ClientId": "<zoom-general-app-client-id>",
+    "ClientSecret": "<zoom-general-app-client-secret>",
+    "RedirectUri": "https://<your-dev-tunnel-host>/zoom/callback",
+    "Scopes": [ "cloud_recording:read" ]
+  }
+}
