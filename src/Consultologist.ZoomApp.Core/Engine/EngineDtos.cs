@@ -1,0 +1,215 @@
+using System.Text.Json.Serialization;
+
+namespace Consultologist.ZoomApp.Core.Engine;
+
+// The engine DTOs the app needs, mirrored on the client side. Field names
+// match the engine records so System.Text.Json binds them by name; only the
+// members the app actually sends or reads are modelled. Sources (engine repo
+// Consultologist/Consultologist-Blazor):
+//   - ConsultGenerationRequest, InputFilePayload, ConsultGenerationJobStartResponse
+//       src/Consultologist.Api/Models/ConsultGenerationRequest.cs
+//   - DocumentExtractionResponse
+//       src/Consultologist.Api/Documents/DocumentExtractions.cs
+//   - WorkflowPackage* responses
+//       src/Consultologist.Api/Workflow/WorkflowPackageModels.cs
+
+/// <summary>
+/// The body of <c>POST ConsultGenerationJobs</c>. The app assembles only the
+/// fields the transcript flow fills: the transcript as a document in
+/// <see cref="InputFiles"/>, the slot it rides named in
+/// <see cref="TranscriptInputs"/>, and the <see cref="WorkflowPackage"/> ref it
+/// discovered. The engine computes extraction, canonicalisation, the
+/// effective-input hash and provenance itself at job start — the app never
+/// supplies them (the verifiability boundary).
+/// </summary>
+public sealed record ConsultGenerationRequest
+{
+    /// <summary>The typed named-input map (declared id → value).</summary>
+    public Dictionary<string, ConsultInputValue>? Inputs { get; init; }
+
+    /// <summary>Slots filled by documents; per slot a list in supplied order.</summary>
+    public Dictionary<string, List<InputFilePayload>>? InputFiles { get; init; }
+
+    /// <summary>The package ref (e.g. <c>name@vYYYY.MM.N</c>); null lets the
+    /// engine use the account's pin. The app echoes the ref it discovered.</summary>
+    public string? WorkflowPackage { get; init; }
+
+    /// <summary>#671: the file slots in <see cref="InputFiles"/> that are
+    /// transcripts, not referral documents. The engine stamps the
+    /// <c>transcript</c> origin (provenance@v2026.09.6) on their extracted text
+    /// instead of <c>document</c> — only the label differs, the digests are a
+    /// document's. Every id here must appear in <see cref="InputFiles"/>.</summary>
+    public IReadOnlyCollection<string>? TranscriptInputs { get; init; }
+}
+
+/// <summary>
+/// A document supplied for an input slot. System.Text.Json serialises
+/// <see cref="Content"/> as base64, so it rides the JSON body — no multipart.
+/// No filename: it can itself be PHI and the engine dispatches on content.
+/// </summary>
+public sealed record InputFilePayload(string ContentType, byte[] Content);
+
+/// <summary>The result of <c>POST DocumentExtractions</c> (preview).</summary>
+public sealed record DocumentExtractionResponse(string Text, string Extractor, int? PageCount);
+
+/// <summary>The <c>202</c> body of <c>POST ConsultGenerationJobs</c>.</summary>
+public sealed record ConsultGenerationJobStartResponse(string JobId, string StatusUrl);
+
+/// <summary>
+/// The poll result of <c>GET ConsultGenerationJobs/{jobId}</c> — only the
+/// members the app surfaces to the clinician. The engine record is larger.
+/// </summary>
+public sealed record ConsultGenerationJobResponse
+{
+    public string Status { get; init; } = "";
+
+    public bool Success { get; init; }
+
+    /// <summary>The single rendered deliverable (Completed single-result jobs).</summary>
+    public string? AssembledDocument { get; init; }
+
+    /// <summary>The per-deliverable documents (v7+ multi-result packages).</summary>
+    public IReadOnlyList<ConsultGenerationResultDocumentResponse>? AssembledDocuments { get; init; }
+
+    /// <summary>The engine's effective-input hash — proof the app surfaces, never supplies.</summary>
+    public string? EffectiveInputHash { get; init; }
+
+    public string? WorkflowPackage { get; init; }
+
+    public string? PackageTitle { get; init; }
+
+    // Progress + the error fields the app reports on a failed run.
+    public int? TotalBlockCount { get; init; }
+
+    public int? CompletedBlockCount { get; init; }
+
+    public int? FailedBlockCount { get; init; }
+
+    public string? RuntimeFailureError { get; init; }
+
+    public string? StartFailure { get; init; }
+
+    public string? AnalysisError { get; init; }
+}
+
+/// <summary>One rendered deliverable of a completed multi-result job.</summary>
+public sealed record ConsultGenerationResultDocumentResponse(
+    string ResultId,
+    string Label,
+    string? Text = null,
+    string? DocumentHash = null);
+
+/// <summary>
+/// The engine's job-status vocabulary (`ConsultGenerationJobStatuses`): the
+/// non-terminal states <c>Queued</c>, <c>Scheduled</c>, <c>Running</c> and the
+/// terminal states <c>Completed</c>, <c>Failed</c>, <c>Cancelled</c>. The poller
+/// asks only "is this terminal?" so any transient/unknown status keeps it
+/// polling rather than reporting a premature failure.
+/// </summary>
+public static class JobStatus
+{
+    public const string Queued = "Queued";
+    public const string Scheduled = "Scheduled";
+    public const string Running = "Running";
+    public const string Completed = "Completed";
+    public const string Failed = "Failed";
+    public const string Cancelled = "Cancelled";
+
+    private static readonly HashSet<string> Terminal =
+        new(StringComparer.OrdinalIgnoreCase) { Completed, Failed, Cancelled };
+
+    /// <summary>True once the job has reached a terminal state and will not change.</summary>
+    public static bool IsTerminal(string status) => status is not null && Terminal.Contains(status);
+}
+
+// ----- Package discovery (GET WorkflowPackages/Current) -----
+
+/// <summary>
+/// The pin-resolved package as the setup form (and now the app) sees it. The
+/// app renders <see cref="Inputs"/> into the Adaptive Card and offers
+/// <see cref="Macros"/> as per-run choices. Mirrors the engine's
+/// <c>WorkflowPackageResponse</c>.
+/// </summary>
+public sealed record WorkflowPackageResponse(
+    string Name,
+    string Version,
+    int SpecVersion,
+    IReadOnlyList<WorkflowPackageInputResponse>? Inputs = null,
+    IReadOnlyList<WorkflowPackageMacroResponse>? Macros = null,
+    string? Title = null)
+{
+    /// <summary>The ref the app echoes back in <see cref="ConsultGenerationRequest.WorkflowPackage"/>.</summary>
+    [JsonIgnore]
+    public string Ref => $"{Name}@{Version}";
+}
+
+/// <summary>One declared input slot — one typed field on the intake card.</summary>
+public sealed record WorkflowPackageInputResponse(
+    string Id,
+    string Label,
+    bool Required,
+    string? Type = null,
+    IReadOnlyList<string>? Values = null,
+    WorkflowPackageElementResponse? Items = null,
+    IReadOnlyList<WorkflowPackageFieldResponse>? Fields = null);
+
+/// <summary>One declared field of an object input.</summary>
+public sealed record WorkflowPackageFieldResponse(
+    string Id,
+    string Label,
+    bool Required,
+    string? Type = null,
+    IReadOnlyList<string>? Values = null,
+    WorkflowPackageElementResponse? Items = null,
+    IReadOnlyList<WorkflowPackageFieldResponse>? Fields = null);
+
+/// <summary>The resolved shape of one array element.</summary>
+public sealed record WorkflowPackageElementResponse(
+    string Type,
+    WorkflowPackageElementResponse? Items = null,
+    IReadOnlyList<WorkflowPackageFieldResponse>? Fields = null,
+    IReadOnlyList<string>? Values = null);
+
+/// <summary>One optional macro offered as a per-run choice.</summary>
+public sealed record WorkflowPackageMacroResponse(string Id, string Label, bool Default);
+
+/// <summary>The declared input type names (engine's <c>WorkflowInputTypes</c>).</summary>
+public static class WorkflowInputTypes
+{
+    public const string Text = "text";
+    public const string Date = "date";
+    public const string Enum = "enum";
+    public const string Boolean = "boolean";
+    public const string Number = "number";
+    public const string Object = "object";
+    public const string Array = "array";
+}
+
+// ----- Account (GET Account/Jobs, GET Account/Me) -----
+
+/// <summary>A page of the clinician's own recent jobs (<c>GET Account/Jobs</c>),
+/// newest first. The panel filters these to the meeting via the app's own
+/// meeting→job map (Leg 1) — the engine models no meeting.</summary>
+public sealed record AccountJobsResponse(
+    IReadOnlyList<AccountJobSummaryResponse> Jobs,
+    string? ContinuationToken = null);
+
+/// <summary>One job summary — enough for the panel to list the meeting's consults
+/// and open the full deliverable via <c>GET ConsultGenerationJobs/{jobId}</c>.</summary>
+public sealed record AccountJobSummaryResponse(
+    string JobId,
+    string Status,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? CompletedAtUtc = null,
+    int? TotalBlockCount = null,
+    int? CompletedBlockCount = null,
+    int? FailedBlockCount = null,
+    string? Source = null);
+
+/// <summary>The signed-in clinician's profile (<c>GET Account/Me</c>) — only the
+/// members the app reads.</summary>
+public sealed record AccountMeResponse(
+    string AppUserId,
+    string? DisplayName = null,
+    string? Email = null,
+    string? Status = null);
