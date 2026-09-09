@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Consultologist for Zoom</title>
+  <!--
+    The Zoom Apps SDK. Loaded from a CDN for the no-build scaffold; a deployed
+    app bundles @zoom/appssdk. The panel talks ONLY to this app's own backend —
+    never to the engine directly, and it never holds a token.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@zoom/appssdk@0.16.0/dist/index.umd.min.js"></script>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; color: #1a1a1a; }
+    h1 { font-size: 16px; margin: 0 0 12px; }
+    button, a.btn { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid #2d6cdf;
+      background: #2d6cdf; color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
+    button:disabled { opacity: .5; cursor: default; }
+    .muted { color: #666; }
+    ul { list-style: none; padding: 0; } li { padding: 6px 0; border-bottom: 1px solid #eee; }
+    #status { margin-top: 12px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Consultologist</h1>
+  <div id="meeting" class="muted">Reading meeting context…</div>
+  <p><button id="generate" disabled>Generate consult from this meeting's transcript</button></p>
+  <p class="muted">Transcription is Zoom's — <a id="connect" href="/zoom/connect">connect your Zoom account</a> so this app can read the meeting transcript.</p>
+  <h2 style="font-size:14px;">This meeting's consults</h2>
+  <ul id="consults"><li class="muted">None yet.</li></ul>
+  <div id="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Consultologist.ZoomApp.Core/Consultologist.ZoomApp.Core.csproj" />
+    <Project Path="src/Consultologist.ZoomApp/Consultologist.ZoomApp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Consultologist.ZoomApp.Tests/Consultologist.ZoomApp.Tests.csproj" />
+  </Folder>
+</Solution>
