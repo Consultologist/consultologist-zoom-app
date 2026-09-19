@@ -1,9 +1,11 @@
 using Consultologist.ZoomApp.Core.Engine;
 using Consultologist.ZoomApp.Core.Meetings;
+using Consultologist.ZoomApp.Core.Security;
 using Consultologist.ZoomApp.Core.Transcript;
 using Consultologist.ZoomApp.Zoom;
 
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -37,7 +39,21 @@ builder.Services.AddSingleton<IClinicianZoomTokens, InMemoryClinicianZoomTokens>
 // --- The satellite's own meeting -> job map (the engine models no meeting). ---
 builder.Services.AddSingleton<IMeetingJobMap, InMemoryMeetingJobMap>();
 
+// --- CSP: the webview is framed by the Zoom client (frame-ancestors); configurable. ---
+builder.Services.Configure<CspOptions>(builder.Configuration.GetSection(CspOptions.Section));
+
 var app = builder.Build();
+
+// The Home URL (and every response) carries the CSP so the panel loads framed in
+// Zoom; set before static files so index.html carries it. Domain Allow List (the
+// Marketplace-side twin) is in the README runbook.
+var csp = CspPolicy.Build(app.Services.GetRequiredService<IOptions<CspOptions>>().Value);
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Content-Security-Policy"] = csp;
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    await next();
+});
 
 app.UseDefaultFiles();   // serve wwwroot/index.html at "/" (the Zoom Home URL)
 app.UseStaticFiles();

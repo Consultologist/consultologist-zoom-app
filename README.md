@@ -73,8 +73,11 @@ the Zoom app config and `Zoom:RedirectUri`.
   `https://<host>/zoom/callback`.
 - **Home URL** `https://<host>/` (in-client panel). Add the panel's **capabilities**
   (`getRunningContext`, `getMeetingContext`, `getMeetingUUID`, `getUserContext`).
-- **Domain Allow List:** our web origin, the engine host
-  (`east.ca.api.consultologist.ai`), and `login.microsoftonline.com`.
+- **Domain Allow List:** the satellite's own web origin (`https://<host>`),
+  `cdn.jsdelivr.net` (the Zoom Apps SDK, until it is bundled), and
+  `login.microsoftonline.com` (Entra sign-in). The engine host is **not** needed —
+  the app is backend-mediated, so the browser only ever calls the satellite, never
+  the engine directly. This mirrors the CSP the app serves (`CspOptions`).
 - The app's **client secret** is also the key for the encrypted `X-Zoom-App-Context`
   header (`ZoomAppContext`, AES-256-GCM, key = SHA-256(secret)). Verify decryption
   against a live launch here.
