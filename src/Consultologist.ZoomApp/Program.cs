@@ -4,6 +4,9 @@ using Consultologist.ZoomApp.Core.Security;
 using Consultologist.ZoomApp.Core.Transcript;
 using Consultologist.ZoomApp.Zoom;
 
+using Consultologist.ZoomApp.Core.Zoom;
+
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
@@ -20,7 +23,20 @@ builder.Services
     .EnableTokenAcquisitionToCallDownstreamApi()
     .AddInMemoryTokenCaches();
 
+// The app runs inside Zoom's cross-site iframe, so the session cookie must be
+// SameSite=None + Secure or the browser drops it and the clinician never stays
+// signed in. (Full in-iframe sign-in — correlation/nonce cookies, any pop-out —
+// is confirmed against a live Zoom launch during provisioning.)
+builder.Services.Configure<CookieAuthenticationOptions>(
+    CookieAuthenticationDefaults.AuthenticationScheme,
+    options =>
+    {
+        options.Cookie.SameSite = SameSiteMode.None;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    });
+
 builder.Services.AddAuthorization();
+builder.Services.AddDataProtection();
 builder.Services.AddControllersWithViews(); // brings in the Identity.Web UI sign-in/out endpoints
 
 // --- The engine client (.Core), base URL from config, delegated bearer per call. ---
@@ -42,6 +58,9 @@ builder.Services.AddSingleton<IMeetingJobMap, InMemoryMeetingJobMap>();
 // --- CSP: the webview is framed by the Zoom client (frame-ancestors); configurable. ---
 builder.Services.Configure<CspOptions>(builder.Configuration.GetSection(CspOptions.Section));
 
+// The verified meeting context (from the signed X-Zoom-App-Context), in an encrypted cookie.
+builder.Services.AddSingleton<ZoomContextCookie>();
+
 var app = builder.Build();
 
 // The Home URL (and every response) carries the CSP so the panel loads framed in
@@ -52,6 +71,24 @@ app.Use(async (context, next) =>
 {
     context.Response.Headers["Content-Security-Policy"] = csp;
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    await next();
+});
+
+// On the Home-URL load Zoom sends the encrypted X-Zoom-App-Context; decrypt it
+// (client secret = the key), check exp, and stash the server-verified meeting in
+// an encrypted cookie the meeting endpoints trust over the browser's value.
+var zoomSecret = app.Services.GetRequiredService<IOptions<ZoomOptions>>().Value.ClientSecret;
+app.Use(async (context, next) =>
+{
+    if ((context.Request.Path == "/" || context.Request.Path == "/index.html")
+        && context.Request.Headers.TryGetValue("X-Zoom-App-Context", out var header)
+        && ZoomAppContext.TryDecrypt(header.ToString(), zoomSecret, out var zc)
+        && zc is not null
+        && !zc.IsExpired(DateTimeOffset.UtcNow))
+    {
+        context.RequestServices.GetRequiredService<ZoomContextCookie>().Write(context, zc);
+    }
+
     await next();
 });
 
@@ -84,11 +121,25 @@ app.MapGet("/zoom/callback", async (
 
 // ----- The panel-facing API (the only surface the browser calls) -----
 
+// The server-verified meeting (from the signed X-Zoom-App-Context) — the panel
+// prefers this over the browser's getMeetingUUID.
+app.MapGet("/api/meeting/context", (HttpContext http, ZoomContextCookie contextCookie) =>
+{
+    var verified = contextCookie.Read(http)?.Mid;
+    return Results.Ok(new { meetingId = verified, inMeeting = !string.IsNullOrEmpty(verified) });
+}).RequireAuthorization();
+
 // Leg 1: the clinician's consults for this meeting.
 app.MapGet("/api/meeting/{uuid}/consults", async (
-    string uuid, System.Security.Claims.ClaimsPrincipal user,
-    EngineApiClient engine, IMeetingJobMap map, ITokenAcquisition tokenAcquisition, CancellationToken ct) =>
+    string uuid, HttpContext http, System.Security.Claims.ClaimsPrincipal user,
+    EngineApiClient engine, IMeetingJobMap map, ZoomContextCookie contextCookie,
+    ITokenAcquisition tokenAcquisition, CancellationToken ct) =>
 {
+    if (MeetingMismatch(contextCookie, http, uuid) is { } mismatch)
+    {
+        return mismatch;
+    }
+
     var clinician = Clinician(user);
     var jobIds = await map.JobsForAsync(clinician, uuid, ct);
     if (jobIds.Count == 0)
@@ -104,10 +155,16 @@ app.MapGet("/api/meeting/{uuid}/consults", async (
 
 // Leg 2: fetch the meeting's transcript from Zoom and start a consult as the clinician.
 app.MapPost("/api/meeting/{uuid}/generate", async (
-    string uuid, System.Security.Claims.ClaimsPrincipal user,
+    string uuid, HttpContext http, System.Security.Claims.ClaimsPrincipal user,
     ZoomClient zoom, IClinicianZoomTokens tokens, EngineApiClient engine,
-    IMeetingJobMap map, ITokenAcquisition tokenAcquisition, CancellationToken ct) =>
+    IMeetingJobMap map, ZoomContextCookie contextCookie,
+    ITokenAcquisition tokenAcquisition, CancellationToken ct) =>
 {
+    if (MeetingMismatch(contextCookie, http, uuid) is { } mismatch)
+    {
+        return mismatch;
+    }
+
     var clinician = Clinician(user);
 
     var zoomToken = tokens.Get(clinician);
@@ -146,3 +203,17 @@ app.Run();
 // store and the meeting->job map.
 static string Clinician(System.Security.Claims.ClaimsPrincipal user) =>
     user.GetObjectId() ?? throw new InvalidOperationException("No Entra object id on the signed-in user.");
+
+// When Zoom signed a meeting context, the requested meeting must be that one —
+// the browser cannot substitute another. Absent a verified context (local dev,
+// or the header not sent) the request proceeds on the browser-supplied uuid.
+static IResult? MeetingMismatch(ZoomContextCookie contextCookie, HttpContext http, string uuid)
+{
+    var verified = contextCookie.Read(http)?.Mid;
+    return !string.IsNullOrEmpty(verified) && !string.Equals(verified, uuid, StringComparison.Ordinal)
+        ? Results.Json(new { error = "meeting_context_mismatch" }, statusCode: StatusCodes.Status403Forbidden)
+        : null;
+}
+
+// Exposed so the integration tests can host the app with WebApplicationFactory.
+public partial class Program;

@@ -79,6 +79,15 @@ async function main() {
     if (ctx.context === 'inMeeting') {
       const { meetingUUID } = await zoomSdk.getMeetingUUID();
       meetingUuid = meetingUUID;
+      // Prefer the server-verified meeting (from the signed X-Zoom-App-Context)
+      // over the browser value when the backend has one.
+      try {
+        const c = await api('/api/meeting/context');
+        if (c.ok) {
+          const verified = await c.json();
+          if (verified.meetingId) meetingUuid = verified.meetingId;
+        }
+      } catch { /* fall back to the SDK value */ }
       $('meeting').textContent = 'In meeting.';
       $('generate').disabled = false;
       await loadConsults();
