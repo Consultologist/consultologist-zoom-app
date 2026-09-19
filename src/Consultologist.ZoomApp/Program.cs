@@ -51,6 +51,7 @@ builder.Services.AddHttpClient<EngineApiClient>(client =>
 builder.Services.Configure<ZoomOptions>(builder.Configuration.GetSection(ZoomOptions.Section));
 builder.Services.AddHttpClient<ZoomClient>();
 builder.Services.AddSingleton<IClinicianZoomTokens, InMemoryClinicianZoomTokens>();
+builder.Services.AddScoped<ZoomTokenProvider>();
 
 // --- The satellite's own meeting -> job map (the engine models no meeting). ---
 builder.Services.AddSingleton<IMeetingJobMap, InMemoryMeetingJobMap>();
@@ -115,7 +116,7 @@ app.MapGet("/zoom/callback", async (
 {
     var clinician = Clinician(user);
     var set = await zoom.ExchangeCodeAsync(code, ct);
-    tokens.Store(clinician, set);
+    await tokens.StoreAsync(clinician, set, ct);
     return Results.Redirect("/");
 }).RequireAuthorization();
 
@@ -156,7 +157,7 @@ app.MapGet("/api/meeting/{uuid}/consults", async (
 // Leg 2: fetch the meeting's transcript from Zoom and start a consult as the clinician.
 app.MapPost("/api/meeting/{uuid}/generate", async (
     string uuid, HttpContext http, System.Security.Claims.ClaimsPrincipal user,
-    ZoomClient zoom, IClinicianZoomTokens tokens, EngineApiClient engine,
+    ZoomClient zoom, ZoomTokenProvider zoomTokens, EngineApiClient engine,
     IMeetingJobMap map, ZoomContextCookie contextCookie,
     ITokenAcquisition tokenAcquisition, CancellationToken ct) =>
 {
@@ -167,7 +168,7 @@ app.MapPost("/api/meeting/{uuid}/generate", async (
 
     var clinician = Clinician(user);
 
-    var zoomToken = tokens.Get(clinician);
+    var zoomToken = await zoomTokens.GetValidTokenAsync(clinician, ct);
     if (zoomToken is null)
     {
         return Results.Json(new { error = "zoom_not_connected" }, statusCode: StatusCodes.Status409Conflict);
