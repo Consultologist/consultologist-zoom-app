@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Consultologist.ZoomApp.Zoom;
+namespace Consultologist.ZoomApp.Core.Zoom;
 
 /// <summary>The decrypted <c>X-Zoom-App-Context</c> — who opened the panel and,
 /// in a meeting, which meeting. Only the fields the app uses are modelled.</summary>
