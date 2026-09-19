@@ -2,9 +2,12 @@ using Consultologist.ZoomApp.Core.Engine;
 using Consultologist.ZoomApp.Core.Meetings;
 using Consultologist.ZoomApp.Core.Security;
 using Consultologist.ZoomApp.Core.Transcript;
+using Consultologist.ZoomApp.Core.Zoom;
+using Consultologist.ZoomApp.Storage;
 using Consultologist.ZoomApp.Zoom;
 
-using Consultologist.ZoomApp.Core.Zoom;
+using Azure.Data.Tables;
+using Azure.Identity;
 
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -50,11 +53,23 @@ builder.Services.AddHttpClient<EngineApiClient>(client =>
 // --- Zoom: user-OAuth + transcript fetch; a per-clinician token store. ---
 builder.Services.Configure<ZoomOptions>(builder.Configuration.GetSection(ZoomOptions.Section));
 builder.Services.AddHttpClient<ZoomClient>();
-builder.Services.AddSingleton<IClinicianZoomTokens, InMemoryClinicianZoomTokens>();
 builder.Services.AddScoped<ZoomTokenProvider>();
 
-// --- The satellite's own meeting -> job map (the engine models no meeting). ---
-builder.Services.AddSingleton<IMeetingJobMap, InMemoryMeetingJobMap>();
+// --- Stores: durable (Azure Table, identity-only) when configured, else in-memory
+//     for local/dev/test. The Zoom token store is encrypted at rest; the meeting ->
+//     job map holds ids only (no PHI). The engine models no meeting, so the map is ours. ---
+var tableServiceUri = builder.Configuration["Storage:TableServiceUri"];
+if (!string.IsNullOrWhiteSpace(tableServiceUri))
+{
+    builder.Services.AddSingleton(new TableServiceClient(new Uri(tableServiceUri), new DefaultAzureCredential()));
+    builder.Services.AddSingleton<IClinicianZoomTokens, TableClinicianZoomTokens>();
+    builder.Services.AddSingleton<IMeetingJobMap, TableMeetingJobMap>();
+}
+else
+{
+    builder.Services.AddSingleton<IClinicianZoomTokens, InMemoryClinicianZoomTokens>();
+    builder.Services.AddSingleton<IMeetingJobMap, InMemoryMeetingJobMap>();
+}
 
 // --- CSP: the webview is framed by the Zoom client (frame-ancestors); configurable. ---
 builder.Services.Configure<CspOptions>(builder.Configuration.GetSection(CspOptions.Section));
