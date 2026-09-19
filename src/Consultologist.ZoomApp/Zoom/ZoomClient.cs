@@ -11,24 +11,29 @@ namespace Consultologist.ZoomApp.Zoom;
 /// <summary>A clinician's Zoom user-OAuth tokens.</summary>
 public sealed record ZoomTokenSet(string AccessToken, string? RefreshToken, DateTimeOffset ExpiresAtUtc);
 
-/// <summary>Where a clinician's Zoom tokens live, keyed by their Entra id. The
-/// scaffold keeps them in memory (lost on restart); a deployed app swaps in a
-/// durable, encrypted per-user store. Zoom tokens never reach the browser.</summary>
+/// <summary>Where a clinician's Zoom tokens live, keyed by their Entra id. Async
+/// so a durable, encrypted per-user store (Azure Table) can back it; the in-memory
+/// default is for local/dev/test. Zoom tokens never reach the browser.</summary>
 public interface IClinicianZoomTokens
 {
-    void Store(string clinicianId, ZoomTokenSet tokens);
+    Task StoreAsync(string clinicianId, ZoomTokenSet tokens, CancellationToken ct = default);
 
-    ZoomTokenSet? Get(string clinicianId);
+    Task<ZoomTokenSet?> GetAsync(string clinicianId, CancellationToken ct = default);
 }
 
-/// <inheritdoc/>
+/// <summary>In-memory <see cref="IClinicianZoomTokens"/> — local/dev/test; lost on restart.</summary>
 public sealed class InMemoryClinicianZoomTokens : IClinicianZoomTokens
 {
     private readonly ConcurrentDictionary<string, ZoomTokenSet> _tokens = new(StringComparer.Ordinal);
 
-    public void Store(string clinicianId, ZoomTokenSet tokens) => _tokens[clinicianId] = tokens;
+    public Task StoreAsync(string clinicianId, ZoomTokenSet tokens, CancellationToken ct = default)
+    {
+        _tokens[clinicianId] = tokens;
+        return Task.CompletedTask;
+    }
 
-    public ZoomTokenSet? Get(string clinicianId) => _tokens.TryGetValue(clinicianId, out var t) ? t : null;
+    public Task<ZoomTokenSet?> GetAsync(string clinicianId, CancellationToken ct = default) =>
+        Task.FromResult(_tokens.TryGetValue(clinicianId, out var t) ? t : null);
 }
 
 /// <summary>
@@ -77,6 +82,31 @@ public sealed class ZoomClient(HttpClient http, IOptions<ZoomOptions> options)
         return new ZoomTokenSet(
             token.AccessToken,
             token.RefreshToken,
+            DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn > 0 ? token.ExpiresIn : 3600));
+    }
+
+    /// <summary>Exchange the clinician's refresh token for a fresh token set. Zoom
+    /// rotates refresh tokens, so the new one is kept (falling back to the old if
+    /// Zoom omits it).</summary>
+    public async Task<ZoomTokenSet> RefreshAsync(string refreshToken, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, _options.TokenEndpoint);
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_options.ClientId}:{_options.ClientSecret}"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = refreshToken,
+        });
+
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var token = await response.Content.ReadFromJsonAsync<TokenResponse>(ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Empty Zoom token response.");
+
+        return new ZoomTokenSet(
+            token.AccessToken,
+            token.RefreshToken ?? refreshToken,
             DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn > 0 ? token.ExpiresIn : 3600));
     }
 
